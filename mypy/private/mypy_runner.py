@@ -95,6 +95,8 @@ def run_mypy(
                 "--explicit-package-bases",
                 # speedup
                 "--fast-module-lookup",
+                # fatal error debugging
+                "--show-traceback",
                 str(root)
             ]
         )
