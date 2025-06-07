@@ -5,7 +5,9 @@ import os
 import shutil
 import sys
 import tempfile
-from typing import Any, Generator, Optional
+from pathlib import Path
+from contextlib import contextmanager
+from typing import Any, Iterator, List, Generator, Optional
 
 import mypy.api
 import mypy.util
@@ -55,44 +57,64 @@ def managed_cache_dir(
         yield tmpdir.name
         tmpdir.cleanup()
 
+@contextmanager
+def symlink_tree(files: List[str]) -> Iterator[Path]:
+    """
+    Create a TemporaryDirectory containing a mirrored directory
+    structure for each path in `files`, with symlinks pointing back
+    to the originals. Yields the root Path of the tempdir.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        for file_path in files:
+            src = Path(file_path).resolve()
+            # Compute a “relative” path inside tmp:
+            #  - if original was absolute, strip the anchor ('/' or 'C:\\', etc)
+            #  - if relative, keep it as-is
+            rel = src.relative_to(src.anchor) if src.is_absolute() else Path(file_path)
+            dst = tmp_root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(src, dst)
+        yield tmp_root
 
 def run_mypy(
-    mypy_ini: Optional[str], cache_dir: str, srcs: list[str]
+    config_file: Optional[str], cache_dir: str, srcs: list[str]
 ) -> tuple[str, str, int]:
-    maybe_config = ["--config-file", mypy_ini] if mypy_ini else []
-    report, errors, status = mypy.api.run(
-        maybe_config
-        + [
-            # do not check mtime in cache
-            "--skip-cache-mtime-checks",
-            # mypy defaults to incremental, but force it on anyway
-            "--incremental",
-            # use a known cache-dir
-            f"--cache-dir={cache_dir}",
-            # use current dir + MYPYPATH to resolve deps
-            "--explicit-package-bases",
-            # speedup
-            "--fast-module-lookup",
-        ]
-        + srcs
-    )
-    if status:
-        sys.stderr.write(errors)
-        sys.stderr.write(report)
+    maybe_config = ["--config-file", config_file] if config_file else []
+    with symlink_tree(srcs) as root:
+        report, errors, status = mypy.api.run(
+            maybe_config
+            + [
+                # do not check mtime in cache
+                "--skip-cache-mtime-checks",
+                # mypy defaults to incremental, but force it on anyway
+                "--incremental",
+                # use a known cache-dir
+                f"--cache-dir={cache_dir}",
+                # use current dir + MYPYPATH to resolve deps
+                "--explicit-package-bases",
+                # speedup
+                "--fast-module-lookup",
+                str(root)
+            ]
+        )
+        if status:
+            sys.stderr.write(errors)
+            sys.stderr.write(report)
 
-    return report, errors, status
+        return report, errors, status
 
 
 def run(
     output: Optional[str],
     cache_dir: Optional[str],
     upstream_caches: list[str],
-    mypy_ini: Optional[str],
+    config_file: Optional[str],
     srcs: list[str],
 ) -> None:
     if len(srcs) > 0:
         with managed_cache_dir(cache_dir, upstream_caches) as cache_dir:
-            report, errors, status = run_mypy(mypy_ini, cache_dir, srcs)
+            report, errors, status = run_mypy(config_file, cache_dir, srcs)
     else:
         report, errors, status = "", "", 0
 
@@ -111,17 +133,17 @@ def main() -> None:
     parser.add_argument("--output", required=False)
     parser.add_argument("-c", "--cache-dir", required=False)
     parser.add_argument("--upstream-cache", required=False, action="append")
-    parser.add_argument("--mypy-ini", required=False)
+    parser.add_argument("--config-file", required=False)
     parser.add_argument("src", nargs="*")
     args = parser.parse_args()
 
     output: Optional[str] = args.output
     cache_dir: Optional[str] = args.cache_dir
     upstream_cache: list[str] = args.upstream_cache or []
-    mypy_ini: Optional[str] = args.mypy_ini
+    config_file: Optional[str] = args.config_file
     srcs: list[str] = args.src
 
-    run(output, cache_dir, upstream_cache, mypy_ini, srcs)
+    run(output, cache_dir, upstream_cache, config_file, srcs)
 
 
 if __name__ == "__main__":

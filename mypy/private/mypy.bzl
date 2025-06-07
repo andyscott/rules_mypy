@@ -19,6 +19,13 @@ MypyCacheInfo = provider(
     },
 )
 
+MypyConfigInfo = provider(
+    doc = "A mypy configuration file.",
+    fields = {
+        "config": "The config file.",
+    },
+)
+
 def _extract_import_dir(import_):
     # _main/path/to/package -> path/to/package
     return import_.split("/", 1)[-1]
@@ -164,9 +171,19 @@ def _mypy_impl(target, ctx):
     args.add_all([c.path for c in upstream_caches], before_each = "--upstream-cache")
     args.add_all([s for s in ctx.rule.files.srcs if "/_virtual_imports/" not in s.short_path])
 
-    if hasattr(ctx.attr, "_mypy_ini"):
-        args.add("--mypy-ini", ctx.file._mypy_ini.path)
-        config_files = [ctx.file._mypy_ini]
+    mypy_config = None
+    for data in ctx.rule.attr.data:
+        if MypyConfigInfo in data:
+            mypy_config = data[MypyConfigInfo].config
+            break
+
+    if not mypy_config:
+        if hasattr(ctx.attr, "_mypy_ini"):
+            mypy_config = ctx.file._mypy_ini
+
+    if mypy_config:
+        args.add("--config-file", mypy_config.path)
+        config_files = [mypy_config]
     else:
         config_files = []
 
@@ -288,3 +305,19 @@ def mypy_cli(name, deps = None, mypy_requirement = None, python_version = "3.12"
         python_version = python_version,
         tags = tags,
     )
+
+def _mypy_config_impl(ctx):
+    return [
+        MypyConfigInfo(config = ctx.file.config),
+    ]
+
+mypy_config = rule(
+    implementation = _mypy_config_impl,
+    attrs = {
+        "config": attr.label(
+            doc = "The mypy configuration file.",
+            allow_single_file = True,
+            mandatory = True,
+        ),
+    },
+)

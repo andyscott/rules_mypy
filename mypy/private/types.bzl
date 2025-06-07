@@ -28,8 +28,8 @@ def _render_types_bzl(rctx, types):
     )
     content += "types = {\n"
     for requirement in types:
-        content += """    requirement("{raw}"): "@@{name}//:{requirement}",\n""".format(
-            raw = requirement.removeprefix("types-").removesuffix("-stubs"),
+        content += """    requirement("{requirement}"): "@@{name}//:{requirement}",\n""".format(
+            # raw = requirement.removeprefix("types-").removesuffix("-stubs"),
             name = str(rctx.attr.name),
             requirement = requirement,
         )
